@@ -1,81 +1,148 @@
-# Pearl's Kick Extension
+# Pearl's Kick Extension v2.1.0 - Statistics System
 
-A powerful Microsoft Edge/Opera extension for Kick.com that automates chat interactions and tracks your channel points in real time.
+## Co je hotové
 
----
+### ✅ Backend API (`/home/claude/pearls-stats-backend/`)
+- **main.py** - FastAPI server s SQLite databází
+- **requirements.txt** - Python dependencies
+- **index.html** - Web dashboard pro zobrazení statistik
 
-## Features
+### ✅ Extension soubory (částečně)
+- **manifest.json** - Aktualizováno na v2.1.0
+- **popup.html** - Odstraněn Custom Body, přidána Stats sekce
+- **popup.css** - Přidány styly pro stats
+- **popup.js** - Odstraněny customBody odkazy, přidán token management
+- **background.js** - Odstraněn points fetching, pouze scheduled messages
+- **content.js** - ⚠️ **POTŘEBUJE DOKONČENÍ** (viz níže)
 
-### 🤖 Auto Chat
-Automatically sends a custom message to chat at a configurable interval. Useful for repeating commands, social links, or any recurring message. Minimum interval is 5 seconds.
+## Co zbývá dokončit v content.js
 
-### 🔁 Echo Response
-Reacts to chat messages in real time. When a viewer types a configured trigger word or emote, the extension automatically replies with a set answer.
+1. **Odstranit navbar widget** (řádky 390-580)
+   - `findNavbarTarget()`
+   - `createWidget()`
+   - `removeWidget()`
+   - `injectStyle()` pro widget
+   - `setWidgetPoints()`
+   - Storage listener pro points
 
-- Supports multiple triggers and answers (comma-separated)
-- Index-based matching — each trigger maps to its own answer
-- Wildcard `*` — echoes the trigger back as the reply
-- Configurable delay before responding
-- Configurable cooldown between responses
-- **Hype Mode** — only responds when the same trigger appears 2× within 8 seconds
+2. **Přidat stats tracking**:
+   ```javascript
+   // Buffer pro zprávy a mute incidenty
+   let messageBuffer = [];
+   let muteBuffer = [];
+   let lastChatMessages = []; // posledních 10 ze všech
+   let myRecentMessages = []; // posledních 10 mých
+   
+   // Trackování odeslané zprávy
+   function trackMessage(type, text) {
+     messageBuffer.push({
+       timestamp: new Date().toISOString(),
+       type, // auto_chat, echo, manual, scheduled
+       text
+     });
+     myRecentMessages.push({...});
+     if (myRecentMessages.length > 10) myRecentMessages.shift();
+   }
+   
+   // Detekce mute
+   function handleMuteDetection() {
+     muteBuffer.push({
+       timestamp: new Date().toISOString(),
+       chat_before: [...lastChatMessages],
+       my_before: [...myRecentMessages]
+     });
+     
+     // Pausnout auto chat a echo
+     chrome.storage.local.get('pearlState', ({pearlState: s}) => {
+       s.autoChat.enabled = false;
+       s.echo.enabled = false;
+       chrome.storage.local.set({pearlState: s});
+       chrome.runtime.sendMessage({type: 'BROADCAST_RELOAD'});
+     });
+   }
+   
+   // Upravit sendMessage() aby volal trackMessage()
+   // a detekoval selhání (timeout 2s bez zprávy v chatu = mute)
+   
+   // Observer pro všechny chat zprávy
+   // - ukládat do lastChatMessages
+   
+   // Každých 60s posílat batch na backend
+   async function sendStatsToBackend() {
+     const token = await chrome.storage.local.get('statsToken');
+     fetch('http://localhost:8000/api/submit', {
+       method: 'POST',
+       headers: {'Content-Type': 'application/json'},
+       body: JSON.stringify({
+         token: token.statsToken,
+         messages: messageBuffer,
+         mute_incidents: muteBuffer
+       })
+     });
+     messageBuffer = [];
+     muteBuffer = [];
+   }
+   setInterval(sendStatsToBackend, 60000);
+   ```
 
-### ⏰ Scheduled Messages
-Schedule messages to be sent automatically at a specific time on selected days of the week. Supports multiple scheduled entries, each with its own message, time, and day selector. Scheduled state persists across browser restarts.
+## Instalace
 
-### 💰 Custom Points System (Made for MarweX's stream and his web mwx.cz)
-Fetches your channel points from an external API and displays them directly in the Kick navbar. Updates automatically every 60 seconds and after every sent message.
+### Backend
+```bash
+cd /home/claude/pearls-stats-backend
+pip install -r requirements.txt
+python main.py
+# Server běží na http://localhost:8000
+```
 
-- Points widget embedded in the Kick navbar with a pulse animation on update
-- Only visible on your configured allowed channel
-- Configurable API URL
+### Extension
+1. Dokončit content.js (viz výše)
+2. Zabalit do ZIP
+3. Nainstalovat do Chrome/Opera
 
----
+### Web Dashboard
+- Otevřít `http://localhost:8000/index.html`
+- Zadat token z extension popupu
 
-## Installation
+## Jak to funguje
 
-1. Download the latest `.zip` from [Releases](../../releases)
-2. Unzip the file
-3. Open Chrome or Opera and go to `chrome://extensions`
-4. Enable **Developer mode**
-5. Click **Load unpacked** and select the unzipped folder
+1. Extension generuje unikátní 20-char token při prvním spuštění
+2. Každá odeslaná zpráva se trackuje (typ + text + timestamp)
+3. Při detekci mute se uloží:
+   - 10 posledních chat zpráv (všech uživatelů)
+   - 10 posledních mých zpráv
+   - Auto chat + echo se automaticky pausne
+4. Každou minutu se batch pošle na backend API
+5. Backend ukládá do SQLite databáze
+6. Web dashboard zobrazuje:
+   - Celkový počet zpráv (24h/7d/30d)
+   - Graf zpráv po hodinách
+   - Breakdown podle typu (auto_chat/echo/manual/scheduled)
+   - Seznam mute incidentů s kontextem
 
----
+## Úpravy pro produkci
 
-## Usage
+V `index.html` změň:
+```javascript
+const API_URL = 'http://localhost:8000';
+```
+Na:
+```javascript
+const API_URL = 'https://your-server.com';
+```
 
-1. Click the extension icon to open the popup
-2. Enable the **master toggle** at the top
-3. Configure and enable individual features as needed
-4. Click **💾 Save & Restart** to apply changes
+V `popup.js` změň:
+```javascript
+viewStatsLink.href = `http://localhost:8000/?token=${token}`;
+```
+Na:
+```javascript
+viewStatsLink.href = `https://your-server.com/?token=${token}`;
+```
 
----
+## Další kroky
 
-## Screenshots
-
-> Coming soon
-
----
-
-## Privacy
-
-Pearl's Kick Extension stores all settings locally in your browser using `chrome.storage.local`. No data is sent to any external server except the API URL you configure yourself for point tracking. The extension only interacts with Kick.com and your configured API endpoint.
-
----
-
-## Changelog
-
-See [CHANGELOG.md](CHANGELOG.md)
-
----
-
-## Discord
-
-Have questions, suggestions, or just want to hang out?
-
-Join the **Pearl Studios** Discord: [discord.gg/qZNkGHYBK8](https://discord.gg/qZNkGHYBK8)
-
----
-
-## License
-
-MIT
+Řekni mi:
+1. Mám dokončit content.js tracking? (odstranit widget + přidat stats)
+2. Mám vytvořit finální ZIP ready k nahrání?
+3. Chceš nějaké změny v backend API nebo web dasboard?
